@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4 (API不要版)", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.1", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.1)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
@@ -153,18 +153,15 @@ def analyze(df_daily, df_htf, df_ltf, threshold_pips):
 # 5. 情勢トレンド・投資家心理ロジック（API非依存エンジン）
 # =========================================================
 def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
-    # RSI計算（市場心理・過熱感）
     delta = df_ltf['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs)).iloc[-1]
 
-    # 日足乖離率（中長期ファンダ的偏り）
     daily_sma = df_daily['Close'].rolling(20).mean().iloc[-1]
     bias = ((price - daily_sma) / daily_sma) * 100
 
-    # 市場時間帯（時間帯別の市場心理）
     now_hour = datetime.datetime.now(JST).hour
     if 9 <= now_hour < 15:
         market_zone = "東京市場（実需・レンジ傾向強）"
@@ -175,7 +172,6 @@ def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
     else:
         market_zone = "オセアニア市場（薄商い・突発変動注意）"
 
-    # シグナル別TP/SLと解説の生成
     if signal == "BUY":
         tp = price + 0.15
         sl = price - 0.10
@@ -282,7 +278,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4")
+st.title("🤖 FX 仮想自動売買モニター V4.1")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -293,7 +289,7 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# 評価損益・ポジション情報カード
+# 評価損益・ポジション情報カード（未設定防止策追加）
 if st.session_state.position:
     pos = st.session_state.position
     if pos["side"] == "BUY":
@@ -305,6 +301,11 @@ if st.session_state.position:
     pnl_color = "#059669" if unrealized_pips >= 0 else "#dc2626"
     bg_color = "rgba(16, 185, 129, 0.08)" if unrealized_pips >= 0 else "rgba(239, 68, 68, 0.08)"
     status_icon = "📈 含み益" if unrealized_pips >= 0 else "📉 含み損"
+
+    # ai_reasonが存在しない・空の場合のフォールバック
+    analysis_text = pos.get('ai_reason', '')
+    if not analysis_text:
+        analysis_text = "※旧バージョンのポジションデータです。次回の自動エントリーより詳細な分析が表示されます。"
 
     st.markdown(
         f"""
@@ -343,7 +344,7 @@ if st.session_state.position:
                 <b>SL (損切)</b>: <code>{pos['sl']:.3f}</code>
             </div>
             <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.7); padding: 12px; border-radius: 6px; white-space: pre-wrap;">
-📊 <b>市場センチメント・時間帯構造分析:</b><br>{pos.get('ai_reason', '')}
+📊 <b>市場センチメント・時間帯構造分析:</b><br>{analysis_text}
             </div>
         </div>
         """,
