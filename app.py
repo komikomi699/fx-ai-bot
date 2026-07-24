@@ -1,5 +1,4 @@
 import os
-import re
 import time
 import json
 import datetime
@@ -8,7 +7,6 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
-from openai import OpenAI
 
 # =========================================================
 # 1. 基本設定・定数定義
@@ -18,11 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX AI 仮想自動売買モニター V3", layout="wide")
-
-api_key = os.environ.get("OPENAI_API_KEY", "")
-if not api_key and "OPENAI_API_KEY" in st.secrets:
-    api_key = st.secrets["OPENAI_API_KEY"]
+st.set_page_config(page_title="FX 仮想自動売買モニター V4 (API不要版)", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -86,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V3)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
@@ -112,15 +106,8 @@ if st.sidebar.button("🗑️ 取引履歴＆設定をリセット"):
     st.sidebar.success("データと設定をすべてリセットしました！")
     st.rerun()
 
-if not api_key:
-    user_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
-    if user_api_key:
-        api_key = user_api_key
-
-client = OpenAI(api_key=api_key) if api_key else None
-
 # =========================================================
-# 4. マルチタイムフレームデータ取得・テクニカル分析
+# 4. データ取得 & テクニカル分析
 # =========================================================
 @st.cache_data(ttl=1)
 def load_data(sym):
@@ -163,73 +150,57 @@ def analyze(df_daily, df_htf, df_ltf, threshold_pips):
     return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low
 
 # =========================================================
-# 5. AIによる「世界情勢・ニュース・投資家心理＋テクニカル」総合評価
+# 5. 情勢トレンド・投資家心理ロジック（API非依存エンジン）
 # =========================================================
-def query_ai(signal, price, df_daily, df_htf, df_ltf, reason):
-    if not client:
-        tp = price + 0.15 if signal == "BUY" else price - 0.15
-        sl = price - 0.10 if signal == "BUY" else price + 0.10
-        return "APIキー未設定のためデフォルト値(TP:+15pips/SL:-10pips)を使用", tp, sl
+def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
+    # RSI計算（市場心理・過熱感）
+    delta = df_ltf['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs)).iloc[-1]
 
-    daily_close = df_daily['Close'].iloc[-1]
-    daily_sma20 = df_daily['Close'].rolling(20).mean().iloc[-1] if len(df_daily) >= 20 else daily_close
-    daily_high_5d = df_daily['High'].tail(5).max()
-    daily_low_5d = df_daily['Low'].tail(5).min()
+    # 日足乖離率（中長期ファンダ的偏り）
+    daily_sma = df_daily['Close'].rolling(20).mean().iloc[-1]
+    bias = ((price - daily_sma) / daily_sma) * 100
 
-    htf_close = df_htf['Close'].iloc[-1]
-    htf_sma20 = df_htf['sma20'].iloc[-1]
-    htf_high_24h = df_htf['High'].tail(24).max()
-    htf_low_24h = df_htf['Low'].tail(24).min()
+    # 市場時間帯（時間帯別の市場心理）
+    now_hour = datetime.datetime.now(JST).hour
+    if 9 <= now_hour < 15:
+        market_zone = "東京市場（実需・レンジ傾向強）"
+    elif 16 <= now_hour < 21:
+        market_zone = "ロンドン市場（トレンド形成期）"
+    elif 21 <= now_hour or now_hour < 6:
+        market_zone = "NY市場（米ニュース・金利変動集中帯）"
+    else:
+        market_zone = "オセアニア市場（薄商い・突発変動注意）"
 
-    recent_5m = df_ltf.tail(5)[['Open', 'High', 'Low', 'Close']].to_string()
+    # シグナル別TP/SLと解説の生成
+    if signal == "BUY":
+        tp = price + 0.15
+        sl = price - 0.10
+        psychology = "【強気買い心理】" if rsi < 70 else "【買われすぎ警戒（過熱）】"
+        reason_str = (
+            f"時間帯: {market_zone}\n"
+            f"RSI(14): {rsi:.1f} → {psychology}\n"
+            f"日足20SMA乖離: {bias:+.2f}%\n"
+            f"→ 中期上昇心理に素直に従いエントリー。利確(+15pips) / 損切(-10pips)をセット。"
+        )
+    elif signal == "SELL":
+        tp = price - 0.15
+        sl = price + 0.10
+        psychology = "【強気売り心理】" if rsi > 30 else "【売られすぎ警戒（パニック売り）】"
+        reason_str = (
+            f"時間帯: {market_zone}\n"
+            f"RSI(14): {rsi:.1f} → {psychology}\n"
+            f"日足20SMA乖離: {bias:+.2f}%\n"
+            f"→ 下降モメンタム優勢と判断。利確(+15pips) / 損切(-10pips)をセット。"
+        )
+    else:
+        tp, sl = price, price
+        reason_str = "静観状態です。"
 
-    prompt = f"""
-あなたはFXのトップヘッジファンドトレーダーおよびマクロ経済アナリストです。
-テクニカル指標（チャート）だけでなく、背景にある「世界情勢・金融政策のトレンド・主要ニュース・投資家の心理（リスクオン/リスクオフ）」を総合的に考慮して、売買判断の最終チェックおよび利確(TP)と損切(SL)の数値を算定してください。
-
-【対象通貨ペア】 USD/JPY
-【シグナル候補】 {signal}
-【現在価格】 {price:.3f}
-【テクニカル上の理由】 {reason}
-
---- テクニカルデータ ---
-1. 日足（長期環境）:
-   - 終値: {daily_close:.3f} / 20SMA: {daily_sma20:.3f}
-   - 5日高値: {daily_high_5d:.3f} / 5日安値: {daily_low_5d:.3f}
-
-2. 1時間足（中期環境）:
-   - 終値: {htf_close:.3f} / 20SMA: {htf_sma20:.3f}
-   - 24時間高値: {htf_high_24h:.3f} / 24時間安値: {htf_low_24h:.3f}
-
-3. 5分足（直近5本）:
-{recent_5m}
-
---- 分析・推論の指示 ---
-1. **ファンダメンタルズ & 投資家心理**: 
-   現在の米日金利差の動向、FRB・日銀の政策スタンス、地政学リスク、市場の投資家心理（タカ派/ハト派、リスクオン/リスクオフ）がドル円に与える影響を整理してください。
-2. **総合判断**:
-   テクニカルの売買方向（{signal}）がファンダメンタルズや市場心理と合致しているか評価してください。もし大きく逆行するリスクがある場合は、利確幅を狭く（または損切り幅をきつく）調整してください。
-
-【出力形式】
-TP: <数値>
-SL: <数値>
-分析・理由: <ファンダメンタルズ/投資家心理とテクニカルをあわせた総合判断の解説を簡潔に>
-"""
-
-    res = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
-    )
-    text = res.choices[0].message.content
-    
-    tp_val, sl_val = None, None
-    tp_match = re.search(r"TP:\s*([0-9]+\.?[0-9]*)", text)
-    sl_match = re.search(r"SL:\s*([0-9]+\.?[0-9]*)", text)
-    if tp_match: tp_val = float(tp_match.group(1))
-    if sl_match: sl_val = float(sl_match.group(1))
-
-    return text, tp_val, sl_val
+    return reason_str, tp, sl
 
 # =========================================================
 # 6. セッション状態初期化 & データ取得
@@ -296,23 +267,22 @@ if st.session_state.position is not None:
         save_position(None)
 
 elif st.session_state.position is None and signal in ["BUY", "SELL"]:
-    ai_reason, tp_val, sl_val = query_ai(signal, current_price, df_daily, df_htf, df_ltf, reason)
-    if tp_val and sl_val:
-        new_pos = {
-            "side": signal,
-            "entry_price": current_price,
-            "tp": tp_val,
-            "sl": sl_val,
-            "entry_time": now_jst_str,
-            "ai_reason": ai_reason
-        }
-        st.session_state.position = new_pos
-        save_position(new_pos)
+    ai_reason, tp_val, sl_val = calculate_market_sentiment(signal, current_price, df_daily, df_htf, df_ltf)
+    new_pos = {
+        "side": signal,
+        "entry_price": current_price,
+        "tp": tp_val,
+        "sl": sl_val,
+        "entry_time": now_jst_str,
+        "ai_reason": ai_reason
+    }
+    st.session_state.position = new_pos
+    save_position(new_pos)
 
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX AI 仮想自動売買モニター V3")
+st.title("🤖 FX 仮想自動売買モニター V4")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -372,8 +342,8 @@ if st.session_state.position:
                 <b>TP (利確)</b>: <code>{pos['tp']:.3f}</code> ｜ 
                 <b>SL (損切)</b>: <code>{pos['sl']:.3f}</code>
             </div>
-            <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.6); padding: 10px; border-radius: 6px;">
-                🧠 <b>AI分析（情勢・心理・テクニカル総合）:</b><br>{pos.get('ai_reason', 'なし')}
+            <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.7); padding: 12px; border-radius: 6px; white-space: pre-wrap;">
+📊 <b>市場センチメント・時間帯構造分析:</b><br>{pos.get('ai_reason', '')}
             </div>
         </div>
         """,
