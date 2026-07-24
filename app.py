@@ -1,11 +1,16 @@
 import os
 import re
 import time
+import datetime
+import pytz
 import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 from openai import OpenAI
+
+# タイムゾーン設定（日本時間）
+JST = pytz.timezone('Asia/Tokyo')
 
 # ページ設定
 st.set_page_config(page_title="FX AI 仮想自動売買モニター", layout="wide")
@@ -19,7 +24,7 @@ st.sidebar.title("⚙️ 仮想トレード設定")
 symbol = st.sidebar.text_input("通貨ペア", "USDJPY=X")
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=10.0, step=1.0)
 lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=1.0, step=0.1)
-refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=3, max_value=15, value=5)
+refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=1, max_value=15, value=1)
 
 if not api_key:
     user_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
@@ -28,12 +33,19 @@ if not api_key:
 
 client = OpenAI(api_key=api_key) if api_key else None
 
-# データ取得
-@st.cache_data(ttl=3)
+# データ取得 (日本時間に変換)
+@st.cache_data(ttl=1)
 def load_data(sym):
     ticker = yf.Ticker(sym)
     df_htf = ticker.history(period="7d", interval="1h")
     df_ltf = ticker.history(period="1d", interval="5m")
+    
+    # タイムゾーン変換 (JST)
+    if not df_htf.empty:
+        df_htf.index = df_htf.index.tz_convert(JST)
+    if not df_ltf.empty:
+        df_ltf.index = df_ltf.index.tz_convert(JST)
+        
     return df_htf, df_ltf
 
 # ロジック判定
@@ -107,7 +119,9 @@ if "total_pnl_pips" not in st.session_state:
 df_htf, df_ltf = load_data(symbol)
 signal, reason, pips_range, prev_high, prev_low = analyze(df_htf, df_ltf, min_pips)
 current_price = df_ltf['Close'].iloc[-1]
-now_str = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+
+# 日本時間（JST）の現在日時
+now_jst_str = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
 
 # ---------------------------------------------------------
 # 🤖 仮想トレード実行エンジン (自動エントリー＆決済)
@@ -140,8 +154,8 @@ if st.session_state.position is not None:
         st.session_state.total_pnl_pips += pnl_pips
         
         st.session_state.trade_history.insert(0, {
-            "エントリー日時": pos["entry_time"],
-            "決済日時": now_str,
+            "エントリー日時(JST)": pos["entry_time"],
+            "決済日時(JST)": now_jst_str,
             "売買": pos["side"],
             "数量(万)": lot_size,
             "新規価格": f"{pos['entry_price']:.3f}",
@@ -161,7 +175,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
             "entry_price": current_price,
             "tp": tp_val,
             "sl": sl_val,
-            "entry_time": now_str
+            "entry_time": now_jst_str
         }
 
 # ---------------------------------------------------------
@@ -175,9 +189,10 @@ col2.metric("売買判定", signal)
 col3.metric("ボラティリティ / 閾値", f"{pips_range:.1f} / {min_pips:.1f} pips")
 col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 
+st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# ① シグナル状態のメッセージ表示 (復元)
+# ① シグナル状態のメッセージ表示
 if signal == "BUY":
     st.success(f"🟢 **【買いシグナル発令】** {reason}")
 elif signal == "SELL":
@@ -193,7 +208,7 @@ if st.session_state.position:
 # ---------------------------------------------------------
 # 📈 テクニカル分析チャート
 # ---------------------------------------------------------
-st.subheader("📈 5分足テクニカル分析チャート")
+st.subheader("📈 5分足テクニカル分析チャート (JST)")
 
 fig = go.Figure()
 df_plot = df_ltf.tail(60)
@@ -210,7 +225,7 @@ fig.add_trace(go.Scatter(
     line=dict(color='#FFD700', width=1.5)
 ))
 
-# 分析ライン1：ブレイクライン（直近高値・安値） (復元)
+# 分析ライン1：ブレイクライン（直近高値・安値）
 fig.add_hline(y=prev_high, line_dash="dot", line_color="#FF4B4B", line_width=1,
               annotation_text=f"直近高値(上抜け買い): {prev_high:.3f}", annotation_position="top right")
 
