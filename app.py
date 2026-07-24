@@ -290,15 +290,8 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-if signal == "BUY":
-    st.success(f"🟢 **【買いシグナル発令】** {reason}")
-elif signal == "SELL":
-    st.error(f"🔴 **【売りシグナル発令】** {reason}")
-else:
-    st.info(f"⚪ **【様子見】** {reason}")
-
 # ---------------------------------------------------------
-# ⚡ リアルタイム評価損益 & ポジション詳細表示
+# ⚡ 大きく強調した「含み損益（評価損益）」専用パネル
 # ---------------------------------------------------------
 if st.session_state.position:
     pos = st.session_state.position
@@ -309,14 +302,59 @@ if st.session_state.position:
         unrealized_pips = (pos["entry_price"] - current_price) * 100
     unrealized_jpy = unrealized_pips * 100 * lot_size
 
-    # ポジション情報メッセージ
-    st.warning(
-        f"⚡ **【仮想ポジション保有中】**\n\n"
-        f"* **エントリー日時 (JST)**: `{pos['entry_time']}`\n"
-        f"* **売買区分 / 約定値**: **{pos['side']}** @ `{pos['entry_price']:.3f}`\n"
-        f"* **目標利確 (TP)**: `{pos['tp']:.3f}` | **損切設定 (SL)**: `{pos['sl']:.3f}`\n"
-        f"* **現在の含み損益**: **`{unrealized_pips:+.1f} pips`** (`{unrealized_jpy:+,.0f} 円`)"
+    # 利益/損失に応じたカラー・アイコン設定
+    pnl_color = "#10b981" if unrealized_pips >= 0 else "#ef4444"  # 緑 または 赤
+    bg_color = "rgba(16, 185, 129, 0.1)" if unrealized_pips >= 0 else "rgba(239, 68, 68, 0.1)"
+    status_icon = "📈 含み益" if unrealized_pips >= 0 else "📉 含み損"
+
+    # HTML/CSSを使った大きめの別枠カード表示
+    st.markdown(
+        f"""
+        <div style="
+            background-color: {bg_color};
+            border: 2px solid {pnl_color};
+            border-radius: 12px;
+            padding: 18px 25px;
+            margin-bottom: 20px;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="color: {pnl_color}; font-weight: bold; font-size: 1.1rem;">
+                    {status_icon}（リアルタイム評価損益）
+                </span>
+                <span style="color: #94a3b8; font-size: 0.9rem;">
+                    エントリー日時: <b>{pos['entry_time']}</b>
+                </span>
+            </div>
+            <div style="display: flex; gap: 30px; align-items: baseline;">
+                <div>
+                    <span style="font-size: 0.9rem; color: #cbd5e1;">損益 pips:</span><br>
+                    <span style="font-size: 2.2rem; font-weight: 800; color: {pnl_color};">
+                        {unrealized_pips:+.1f} <span style="font-size: 1.2rem;">pips</span>
+                    </span>
+                </div>
+                <div>
+                    <span style="font-size: 0.9rem; color: #cbd5e1;">評価損益額:</span><br>
+                    <span style="font-size: 2.2rem; font-weight: 800; color: {pnl_color};">
+                        {unrealized_jpy:+,.0f} <span style="font-size: 1.2rem;">円</span>
+                    </span>
+                </div>
+            </div>
+            <div style="margin-top: 10px; font-size: 0.95rem; color: #e2e8f0; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+                保有ポジション: <b>{pos['side']}</b> @ <code>{pos['entry_price']:.3f}</code> ｜ 
+                <b>TP (利確)</b>: <code>{pos['tp']:.3f}</code> ｜ 
+                <b>SL (損切)</b>: <code>{pos['sl']:.3f}</code>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
+else:
+    if signal == "BUY":
+        st.success(f"🟢 **【買いシグナル発令】** {reason}")
+    elif signal == "SELL":
+        st.error(f"🔴 **【売りシグナル発令】** {reason}")
+    else:
+        st.info(f"⚪ **【様子見】** {reason}")
 
 # ---------------------------------------------------------
 # 📈 テクニカル分析チャート
