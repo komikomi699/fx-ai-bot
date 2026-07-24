@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.4", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.5", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -24,7 +24,7 @@ st.set_page_config(page_title="FX 仮想自動売買モニター V4.4", layout="
 def load_config():
     default_config = {
         "symbol": "USDJPY=X",
-        "min_pips": 5.0,  # トレードされやすくするためデフォルトを少し緩和
+        "min_pips": 5.0,
         "lot_size": 1.0,
         "refresh_rate": 3
     }
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.4)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.5)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=0.5)
@@ -196,7 +196,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
-            f"→ 下降モメンタム優勢。利確(-15pips) / 損切(+10pips)。"
+            f"→ 下降モメンタム優勢。利確(+15pips) / 損切(-10pips)。"
         )
     else:
         tp, sl = price, price
@@ -226,7 +226,7 @@ signal, reason, pips_range, prev_high, prev_low = analyze(df_daily, df_htf, df_l
 if not df_ltf.empty:
     current_price = df_ltf['Close'].iloc[-1]
 else:
-    current_price = 150.0  フォールバック
+    current_price = 150.0
 
 now_jst_str = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -292,7 +292,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.4")
+st.title("🤖 FX 仮想自動売買モニター V4.5")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -415,11 +415,11 @@ fig.add_hline(y=prev_low, line_dash="dot", line_color="#0080FF", line_width=1,
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
 
-# ポジション保有時はエントリーポイントとTP/SLを明確にチャートに指し示す
+# ポジション保有時はエントリーポイント、利確(TP)、損切(SL)の線をチャートに描写
 if st.session_state.position:
     pos = st.session_state.position
     
-    # エントリーラインの描画（太い白色の線で指し示す）
+    # エントリーライン
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="#FFFFFF", line_width=2.5,
                   annotation_text=f"📍 エントリー ({pos['side']}): {pos['entry_price']:.3f}", annotation_position="middle left")
     
@@ -437,7 +437,6 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
-# ちらつき防止のための config 設定（画面再描画時のアニメーションを無効化）
 config = {'displayModeBar': True, 'staticPlot': False}
 st.plotly_chart(fig, use_container_width=True, config=config)
 
