@@ -297,9 +297,26 @@ elif signal == "SELL":
 else:
     st.info(f"⚪ **【様子見】** {reason}")
 
+# ---------------------------------------------------------
+# ⚡ リアルタイム評価損益 & ポジション詳細表示
+# ---------------------------------------------------------
 if st.session_state.position:
     pos = st.session_state.position
-    st.warning(f"⚡ **【仮想ポジション保有中】** {pos['side']} @ `{pos['entry_price']:.3f}` | **TP (利確)**: `{pos['tp']:.3f}` | **SL (損切)**: `{pos['sl']:.3f}`")
+    # 現在の含み損益(pips & 円)の計算
+    if pos["side"] == "BUY":
+        unrealized_pips = (current_price - pos["entry_price"]) * 100
+    else:
+        unrealized_pips = (pos["entry_price"] - current_price) * 100
+    unrealized_jpy = unrealized_pips * 100 * lot_size
+
+    # ポジション情報メッセージ
+    st.warning(
+        f"⚡ **【仮想ポジション保有中】**\n\n"
+        f"* **エントリー日時 (JST)**: `{pos['entry_time']}`\n"
+        f"* **売買区分 / 約定値**: **{pos['side']}** @ `{pos['entry_price']:.3f}`\n"
+        f"* **目標利確 (TP)**: `{pos['tp']:.3f}` | **損切設定 (SL)**: `{pos['sl']:.3f}`\n"
+        f"* **現在の含み損益**: **`{unrealized_pips:+.1f} pips`** (`{unrealized_jpy:+,.0f} 円`)"
+    )
 
 # ---------------------------------------------------------
 # 📈 テクニカル分析チャート
@@ -328,8 +345,27 @@ fig.add_hline(y=prev_low, line_dash="dot", line_color="#0080FF", line_width=1,
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
 
+# --- ポジション保有時：チャート上への表示（マーカー & 水平線） ---
 if st.session_state.position:
     pos = st.session_state.position
+    entry_time_dt = pd.to_datetime(pos["entry_time"]).tz_localize(JST)
+
+    # 1. チャート上へのエントリーポイント（マーカー表示）
+    marker_symbol = "triangle-up" if pos["side"] == "BUY" else "triangle-down"
+    marker_color = "#0080FF" if pos["side"] == "BUY" else "#FF4B4B"
+    marker_name = f"エントリー ({pos['side']})"
+
+    fig.add_trace(go.Scatter(
+        x=[entry_time_dt],
+        y=[pos["entry_price"]],
+        mode="markers+text",
+        marker=dict(symbol=marker_symbol, size=14, color=marker_color),
+        text=[f"  {pos['side']} @ {pos['entry_price']:.3f}"],
+        textposition="top right" if pos["side"] == "BUY" else "bottom right",
+        name=marker_name
+    ))
+
+    # 2. 保有価格・TP・SLラインの描画
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="white", line_width=2,
                   annotation_text=f"保有位置: {pos['entry_price']:.3f}", annotation_position="bottom right")
     fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2,
