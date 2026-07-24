@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.2", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.3", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.2)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.3)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
@@ -283,7 +283,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.2")
+st.title("🤖 FX 仮想自動売買モニター V4.3")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -355,7 +355,6 @@ if st.session_state.position:
         unsafe_allow_html=True
     )
 else:
-    # ポジションがない（様子見中・シグナル待ち）の時でも分析枠を常時表示
     hold_reason, _, _ = calculate_market_sentiment("HOLD", current_price, df_daily, df_htf, df_ltf)
     
     st.markdown(
@@ -369,7 +368,7 @@ else:
         ">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <span style="color: #2563eb; font-weight: bold; font-size: 1.2rem;">
-                    ⚪ 様き見中（シグナル監視・エントリー待機）
+                    ⚪ 様子見中（シグナル監視・エントリー待機）
                 </span>
                 <span style="color: #334155; font-size: 0.95rem; font-weight: 600;">
                     判定理由: <b>{reason}</b>
