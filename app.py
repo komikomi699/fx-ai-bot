@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.7", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.8", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.7)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.8)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=0.5)
@@ -292,7 +292,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.7")
+st.title("🤖 FX 仮想自動売買モニター V4.8")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -397,11 +397,11 @@ fig.add_hline(y=prev_low, line_dash="dash", line_color="#0080FF", line_width=1.5
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"Current: {current_price:.3f}", annotation_position="top left")
 
-# ポジション保有時はエントリー、TP、SLを強調描写
+# ポジション保有時はエントリー、TP、SLを強調描写（annotation_positionをtop leftに変更して競合エラーを回避）
 if st.session_state.position:
     pos = st.session_state.position
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="#FFFFFF", line_width=2.5,
-                  annotation_text=f"Entry ({pos['side']}): {pos['entry_price']:.3f}", annotation_position="middle left")
+                  annotation_text=f"Entry ({pos['side']}): {pos['entry_price']:.3f}", annotation_position="top left")
     fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2,
                   annotation_text=f"TP: {pos['tp']:.3f}", annotation_position="bottom left")
     fig.add_hline(y=pos["sl"], line_dash="dash", line_color="#FF0055", line_width=2,
