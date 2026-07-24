@@ -11,6 +11,7 @@ from openai import OpenAI
 
 # タイムゾーン設定（日本時間）
 JST = pytz.timezone('Asia/Tokyo')
+CSV_FILE = "trade_history.csv"
 
 # ページ設定
 st.set_page_config(page_title="FX AI 仮想自動売買モニター", layout="wide")
@@ -26,12 +27,35 @@ min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=1
 lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=1.0, step=0.1)
 refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=1, max_value=15, value=1)
 
+# CSVリセット機能
+if st.sidebar.button("🗑️ 取引履歴をリセット"):
+    if os.path.exists(CSV_FILE):
+        os.remove(CSV_FILE)
+    st.session_state.trade_history = []
+    st.session_state.total_pnl_pips = 0.0
+    st.session_state.position = None
+    st.sidebar.success("取引履歴をリセットしました！")
+    st.rerun()
+
 if not api_key:
     user_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     if user_api_key:
         api_key = user_api_key
 
 client = OpenAI(api_key=api_key) if api_key else None
+
+# CSVから履歴を読み込む関数
+def load_history_from_csv():
+    if os.path.exists(CSV_FILE):
+        try:
+            df = pd.read_csv(CSV_FILE)
+            history = df.to_dict('records')
+            # 累計pipsの再計算
+            total_pips = sum(float(str(row["獲得pips"]).replace("+", "")) for row in history if "獲得pips" in row)
+            return history, total_pips
+        except Exception:
+            return [], 0.0
+    return [], 0.0
 
 # データ取得 (日本時間に変換)
 @st.cache_data(ttl=1)
@@ -40,7 +64,6 @@ def load_data(sym):
     df_htf = ticker.history(period="7d", interval="1h")
     df_ltf = ticker.history(period="1d", interval="5m")
     
-    # タイムゾーン変換 (JST)
     if not df_htf.empty:
         df_htf.index = df_htf.index.tz_convert(JST)
     if not df_ltf.empty:
@@ -107,20 +130,19 @@ def query_ai(signal, price, df_ltf, reason):
 
     return text, tp_val, sl_val
 
-# --- 状態管理（仮想ポジション＆取引履歴） ---
+# --- 状態管理（初期化＆CSV読み込み） ---
 if "position" not in st.session_state:
     st.session_state.position = None
-if "trade_history" not in st.session_state:
-    st.session_state.trade_history = []
-if "total_pnl_pips" not in st.session_state:
-    st.session_state.total_pnl_pips = 0.0
+
+if "trade_history" not in st.session_state or "total_pnl_pips" not in st.session_state:
+    history, total_pips = load_history_from_csv()
+    st.session_state.trade_history = history
+    st.session_state.total_pnl_pips = total_pips
 
 # データ取得
 df_htf, df_ltf = load_data(symbol)
 signal, reason, pips_range, prev_high, prev_low = analyze(df_htf, df_ltf, min_pips)
 current_price = df_ltf['Close'].iloc[-1]
-
-# 日本時間（JST）の現在日時
 now_jst_str = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
 
 # ---------------------------------------------------------
@@ -153,7 +175,7 @@ if st.session_state.position is not None:
         pnl_jpy = pnl_pips * 100 * lot_size
         st.session_state.total_pnl_pips += pnl_pips
         
-        st.session_state.trade_history.insert(0, {
+        new_record = {
             "エントリー日時(JST)": pos["entry_time"],
             "決済日時(JST)": now_jst_str,
             "売買": pos["side"],
@@ -163,7 +185,14 @@ if st.session_state.position is not None:
             "結果": close_reason,
             "獲得pips": f"{pnl_pips:+.1f}",
             "損益金額(円)": f"{pnl_jpy:+,.0f}円"
-        })
+        }
+        
+        st.session_state.trade_history.insert(0, new_record)
+        
+        # CSVファイルに永続化保存
+        df_to_save = pd.DataFrame(st.session_state.trade_history)
+        df_to_save.to_csv(CSV_FILE, index=False)
+
         st.session_state.position = None
 
 # 2. 新規エントリー判定
@@ -192,7 +221,6 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# ① シグナル状態のメッセージ表示
 if signal == "BUY":
     st.success(f"🟢 **【買いシグナル発令】** {reason}")
 elif signal == "SELL":
@@ -200,7 +228,6 @@ elif signal == "SELL":
 else:
     st.info(f"⚪ **【様子見】** {reason}")
 
-# ② 現在保有中の仮想ポジション表示
 if st.session_state.position:
     pos = st.session_state.position
     st.warning(f"⚡ **【仮想ポジション保有中】** {pos['side']} @ `{pos['entry_price']:.3f}` | **TP (利確)**: `{pos['tp']:.3f}` | **SL (損切)**: `{pos['sl']:.3f}`")
@@ -213,30 +240,25 @@ st.subheader("📈 5分足テクニカル分析チャート (JST)")
 fig = go.Figure()
 df_plot = df_ltf.tail(60)
 
-# ローソク足
 fig.add_trace(go.Candlestick(
     x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
     low=df_plot['Low'], close=df_plot['Close'], name="USD/JPY 5分足"
 ))
 
-# 20SMA
 fig.add_trace(go.Scatter(
     x=df_plot.index, y=df_plot['sma20'], mode='lines', name='20 SMA',
     line=dict(color='#FFD700', width=1.5)
 ))
 
-# 分析ライン1：ブレイクライン（直近高値・安値）
 fig.add_hline(y=prev_high, line_dash="dot", line_color="#FF4B4B", line_width=1,
               annotation_text=f"直近高値(上抜け買い): {prev_high:.3f}", annotation_position="top right")
 
 fig.add_hline(y=prev_low, line_dash="dot", line_color="#0080FF", line_width=1,
               annotation_text=f"直近安値(下抜け売り): {prev_low:.3f}", annotation_position="bottom right")
 
-# 分析ライン2：現在値
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
 
-# 分析ライン3：保有ポジション・TP・SLライン
 if st.session_state.position:
     pos = st.session_state.position
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="white", line_width=2,
@@ -257,14 +279,13 @@ st.plotly_chart(fig, use_container_width=True)
 # ---------------------------------------------------------
 # 📋 取引履歴の一覧表
 # ---------------------------------------------------------
-st.subheader("📋 仮想トレード取引履歴一覧")
+st.subheader("📋 仮想トレード取引履歴一覧 (自動保存対応)")
 
 if st.session_state.trade_history:
     df_history = pd.DataFrame(st.session_state.trade_history)
     st.dataframe(df_history, use_container_width=True)
 else:
-    st.caption("※まだ取引履歴はありません。シグナルが発生して売買が決済されると自動で一覧に追加されます。")
+    st.caption("※まだ取引履歴はありません。シグナルが発生して売買が決済されると自動でCSVに保存・一覧に追加されます。")
 
-# 画面自動更新
 time.sleep(refresh_rate)
 st.rerun()
