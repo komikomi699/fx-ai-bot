@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.1", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.2", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.1)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.2)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
@@ -152,7 +152,7 @@ def analyze(df_daily, df_htf, df_ltf, threshold_pips):
 # =========================================================
 # 5. 情勢トレンド・投資家心理ロジック（API非依存エンジン）
 # =========================================================
-def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
+def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
     delta = df_ltf['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -172,7 +172,7 @@ def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
     else:
         market_zone = "オセアニア市場（薄商い・突発変動注意）"
 
-    if signal == "BUY":
+    if signal_type == "BUY":
         tp = price + 0.15
         sl = price - 0.10
         psychology = "【強気買い心理】" if rsi < 70 else "【買われすぎ警戒（過熱）】"
@@ -182,7 +182,7 @@ def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
             f"日足20SMA乖離: {bias:+.2f}%\n"
             f"→ 中期上昇心理に素直に従いエントリー。利確(+15pips) / 損切(-10pips)をセット。"
         )
-    elif signal == "SELL":
+    elif signal_type == "SELL":
         tp = price - 0.15
         sl = price + 0.10
         psychology = "【強気売り心理】" if rsi > 30 else "【売られすぎ警戒（パニック売り）】"
@@ -194,7 +194,12 @@ def calculate_market_sentiment(signal, price, df_daily, df_htf, df_ltf):
         )
     else:
         tp, sl = price, price
-        reason_str = "静観状態です。"
+        reason_str = (
+            f"時間帯: {market_zone}\n"
+            f"RSI(14): {rsi:.1f} → 【中立・様子見心理】\n"
+            f"日足20SMA乖離: {bias:+.2f}%\n"
+            f"→ 現在はブレイク条件未達成のため静観中。ボラティリティや方向性が揃うのを待っています。"
+        )
 
     return reason_str, tp, sl
 
@@ -278,7 +283,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.1")
+st.title("🤖 FX 仮想自動売買モニター V4.2")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -289,7 +294,7 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# 評価損益・ポジション情報カード（未設定防止策追加）
+# 評価損益・ポジション情報カード ＆ 常時分析表示枠
 if st.session_state.position:
     pos = st.session_state.position
     if pos["side"] == "BUY":
@@ -302,10 +307,9 @@ if st.session_state.position:
     bg_color = "rgba(16, 185, 129, 0.08)" if unrealized_pips >= 0 else "rgba(239, 68, 68, 0.08)"
     status_icon = "📈 含み益" if unrealized_pips >= 0 else "📉 含み損"
 
-    # ai_reasonが存在しない・空の場合のフォールバック
     analysis_text = pos.get('ai_reason', '')
     if not analysis_text:
-        analysis_text = "※旧バージョンのポジションデータです。次回の自動エントリーより詳細な分析が表示されます。"
+        analysis_text, _, _ = calculate_market_sentiment(pos["side"], pos["entry_price"], df_daily, df_htf, df_ltf)
 
     st.markdown(
         f"""
@@ -351,12 +355,33 @@ if st.session_state.position:
         unsafe_allow_html=True
     )
 else:
-    if signal == "BUY":
-        st.success(f"🟢 **【買いシグナル発令】** {reason}")
-    elif signal == "SELL":
-        st.error(f"🔴 **【売りシグナル発令】** {reason}")
-    else:
-        st.info(f"⚪ **【様子見】** {reason}")
+    # ポジションがない（様子見中・シグナル待ち）の時でも分析枠を常時表示
+    hold_reason, _, _ = calculate_market_sentiment("HOLD", current_price, df_daily, df_htf, df_ltf)
+    
+    st.markdown(
+        f"""
+        <div style="
+            background-color: rgba(59, 130, 246, 0.06);
+            border: 2px solid #3b82f6;
+            border-radius: 12px;
+            padding: 20px 25px;
+            margin-bottom: 20px;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span style="color: #2563eb; font-weight: bold; font-size: 1.2rem;">
+                    ⚪ 様き見中（シグナル監視・エントリー待機）
+                </span>
+                <span style="color: #334155; font-size: 0.95rem; font-weight: 600;">
+                    判定理由: <b>{reason}</b>
+                </span>
+            </div>
+            <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.7); padding: 12px; border-radius: 6px; white-space: pre-wrap;">
+📊 <b>市場センチメント・時間帯構造分析:</b><br>{hold_reason}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 # =========================================================
 # 9. インタラクティブ・チャート描画
