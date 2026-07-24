@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import json
 import datetime
 import pytz
 import streamlit as st
@@ -12,29 +13,106 @@ from openai import OpenAI
 # タイムゾーン設定（日本時間）
 JST = pytz.timezone('Asia/Tokyo')
 CSV_FILE = "trade_history.csv"
+CONFIG_FILE = "config.json"
+POSITION_FILE = "position.json"
 
 # ページ設定
 st.set_page_config(page_title="FX AI 仮想自動売買モニター", layout="wide")
 
-# OpenAI API Key設定 (Secrets または サイドバーから)
+# OpenAI API Key設定
 api_key = os.environ.get("OPENAI_API_KEY", "")
 if not api_key and "OPENAI_API_KEY" in st.secrets:
     api_key = st.secrets["OPENAI_API_KEY"]
 
-st.sidebar.title("⚙️ 仮想トレード設定")
-symbol = st.sidebar.text_input("通貨ペア", "USDJPY=X")
-min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=10.0, step=1.0)
-lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=1.0, step=0.1)
-refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=1, max_value=15, value=1)
+# ---------------------------------------------------------
+# 💾 設定・データファイルの読み書き関数
+# ---------------------------------------------------------
+def load_config():
+    default_config = {
+        "symbol": "USDJPY=X",
+        "min_pips": 10.0,
+        "lot_size": 1.0,
+        "refresh_rate": 1
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                default_config.update(config)
+        except Exception:
+            pass
+    return default_config
 
-# CSVリセット機能
-if st.sidebar.button("🗑️ 取引履歴をリセット"):
+def save_config(config_data):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_position():
+    if os.path.exists(POSITION_FILE):
+        try:
+            with open(POSITION_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+def save_position(pos_data):
+    try:
+        if pos_data is None:
+            if os.path.exists(POSITION_FILE):
+                os.remove(POSITION_FILE)
+        else:
+            with open(POSITION_FILE, "w", encoding="utf-8") as f:
+                json.dump(pos_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_history_from_csv():
     if os.path.exists(CSV_FILE):
-        os.remove(CSV_FILE)
+        try:
+            df = pd.read_csv(CSV_FILE)
+            history = df.to_dict('records')
+            total_pips = sum(float(str(row["獲得pips"]).replace("+", "")) for row in history if "獲得pips" in row)
+            return history, total_pips
+        except Exception:
+            return [], 0.0
+    return [], 0.0
+
+# 保存されている設定の読み込み
+saved_config = load_config()
+
+# ---------------------------------------------------------
+# ⚙️ サイドバー（設定入力）
+# ---------------------------------------------------------
+st.sidebar.title("⚙️ 仮想トレード設定")
+
+symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
+min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
+lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=float(saved_config["lot_size"]), step=0.1)
+refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=1, max_value=15, value=int(saved_config["refresh_rate"]))
+
+# 設定値が変更されたら自動保存
+current_config = {
+    "symbol": symbol,
+    "min_pips": min_pips,
+    "lot_size": lot_size,
+    "refresh_rate": refresh_rate
+}
+if current_config != saved_config:
+    save_config(current_config)
+
+# リセット機能
+if st.sidebar.button("🗑️ 取引履歴＆設定をリセット"):
+    for file_path in [CSV_FILE, CONFIG_FILE, POSITION_FILE]:
+        if os.path.exists(file_path):
+            os.remove(file_path)
     st.session_state.trade_history = []
     st.session_state.total_pnl_pips = 0.0
     st.session_state.position = None
-    st.sidebar.success("取引履歴をリセットしました！")
+    st.sidebar.success("データと設定をすべてリセットしました！")
     st.rerun()
 
 if not api_key:
@@ -44,20 +122,9 @@ if not api_key:
 
 client = OpenAI(api_key=api_key) if api_key else None
 
-# CSVから履歴を読み込む関数
-def load_history_from_csv():
-    if os.path.exists(CSV_FILE):
-        try:
-            df = pd.read_csv(CSV_FILE)
-            history = df.to_dict('records')
-            # 累計pipsの再計算
-            total_pips = sum(float(str(row["獲得pips"]).replace("+", "")) for row in history if "獲得pips" in row)
-            return history, total_pips
-        except Exception:
-            return [], 0.0
-    return [], 0.0
-
-# データ取得 (日本時間に変換)
+# ---------------------------------------------------------
+# 📊 データ取得 & 分析ロジック
+# ---------------------------------------------------------
 @st.cache_data(ttl=1)
 def load_data(sym):
     ticker = yf.Ticker(sym)
@@ -71,7 +138,6 @@ def load_data(sym):
         
     return df_htf, df_ltf
 
-# ロジック判定
 def analyze(df_htf, df_ltf, threshold_pips):
     df_htf['sma20'] = df_htf['Close'].rolling(window=20).mean()
     htf_trend = "UP" if df_htf['Close'].iloc[-1] > df_htf['sma20'].iloc[-1] else "DOWN"
@@ -96,7 +162,6 @@ def analyze(df_htf, df_ltf, threshold_pips):
 
     return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low
 
-# AI判定
 def query_ai(signal, price, df_ltf, reason):
     if not client:
         tp = price + 0.15 if signal == "BUY" else price - 0.15
@@ -130,9 +195,9 @@ def query_ai(signal, price, df_ltf, reason):
 
     return text, tp_val, sl_val
 
-# --- 状態管理（初期化＆CSV読み込み） ---
+# --- 状態復元 ---
 if "position" not in st.session_state:
-    st.session_state.position = None
+    st.session_state.position = load_position()
 
 if "trade_history" not in st.session_state or "total_pnl_pips" not in st.session_state:
     history, total_pips = load_history_from_csv()
@@ -189,23 +254,27 @@ if st.session_state.position is not None:
         
         st.session_state.trade_history.insert(0, new_record)
         
-        # CSVファイルに永続化保存
+        # CSVへ保存
         df_to_save = pd.DataFrame(st.session_state.trade_history)
         df_to_save.to_csv(CSV_FILE, index=False)
 
+        # ポジションクリア＆ファイル更新
         st.session_state.position = None
+        save_position(None)
 
 # 2. 新規エントリー判定
 elif st.session_state.position is None and signal in ["BUY", "SELL"]:
     _, tp_val, sl_val = query_ai(signal, current_price, df_ltf, reason)
     if tp_val and sl_val:
-        st.session_state.position = {
+        new_pos = {
             "side": signal,
             "entry_price": current_price,
             "tp": tp_val,
             "sl": sl_val,
             "entry_time": now_jst_str
         }
+        st.session_state.position = new_pos
+        save_position(new_pos) # ポジション情報の永続化保存
 
 # ---------------------------------------------------------
 # 📊 UI表示部
@@ -279,13 +348,13 @@ st.plotly_chart(fig, use_container_width=True)
 # ---------------------------------------------------------
 # 📋 取引履歴の一覧表
 # ---------------------------------------------------------
-st.subheader("📋 仮想トレード取引履歴一覧 (自動保存対応)")
+st.subheader("📋 仮想トレード取引履歴一覧 (完全永続化)")
 
 if st.session_state.trade_history:
     df_history = pd.DataFrame(st.session_state.trade_history)
     st.dataframe(df_history, use_container_width=True)
 else:
-    st.caption("※まだ取引履歴はありません。シグナルが発生して売買が決済されると自動でCSVに保存・一覧に追加されます。")
+    st.caption("※まだ取引履歴はありません。シグナルが発生して売買が決済されると自動で保存・一覧に追加されます。")
 
 time.sleep(refresh_rate)
 st.rerun()
