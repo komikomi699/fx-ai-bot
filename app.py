@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from openai import OpenAI
 
 # ページ設定
-st.set_page_config(page_title="FX 自動ペーパートレード AI Monitor", layout="wide")
+st.set_page_config(page_title="FX AI 仮想自動売買モニター", layout="wide")
 
 # OpenAI API Key設定 (Secrets または サイドバーから)
 api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -18,7 +18,7 @@ if not api_key and "OPENAI_API_KEY" in st.secrets:
 st.sidebar.title("⚙️ 仮想トレード設定")
 symbol = st.sidebar.text_input("通貨ペア", "USDJPY=X")
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=10.0, step=1.0)
-lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=1.0, step=0.1) # 1万通貨 = 10,000通貨
+lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=1.0, step=0.1)
 refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=3, max_value=15, value=5)
 
 if not api_key:
@@ -52,19 +52,18 @@ def analyze(df_htf, df_ltf, threshold_pips):
     pips_range = (prev_high - prev_low) * 100
 
     if pips_range < threshold_pips:
-        return "HOLD", f"ボラティリティ不足 ({pips_range:.1f} pips)", pips_range, prev_high, prev_low
+        return "HOLD", f"ボラティリティ不足 ({pips_range:.1f} pips < 閾値{threshold_pips:.1f} pips)", pips_range, prev_high, prev_low
 
     if htf_trend == "UP" and current_close > prev_high:
-        return "BUY", "H1上昇 + M5高値ブレイク", pips_range, prev_high, prev_low
+        return "BUY", "H1上昇トレンド + M5高値ブレイク", pips_range, prev_high, prev_low
     elif htf_trend == "DOWN" and current_close < prev_low:
-        return "SELL", "H1下降 + M5安値ブレイク", pips_range, prev_high, prev_low
+        return "SELL", "H1下降トレンド + M5安値ブレイク", pips_range, prev_high, prev_low
 
-    return "HOLD", "静観（ブレイク未達成）", pips_range, prev_high, prev_low
+    return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low
 
 # AI判定
 def query_ai(signal, price, df_ltf, reason):
     if not client:
-        # APIキーがない場合のデフォルト（利確+15pips / 損切-10pips）
         tp = price + 0.15 if signal == "BUY" else price - 0.15
         sl = price - 0.10 if signal == "BUY" else price + 0.10
         return "APIキー未設定のためデフォルト値(TP:+15pips/SL:-10pips)を使用", tp, sl
@@ -98,11 +97,11 @@ def query_ai(signal, price, df_ltf, reason):
 
 # --- 状態管理（仮想ポジション＆取引履歴） ---
 if "position" not in st.session_state:
-    st.session_state.position = None  # 保有中のポジション情報
+    st.session_state.position = None
 if "trade_history" not in st.session_state:
-    st.session_state.trade_history = []  # 取引履歴一覧
+    st.session_state.trade_history = []
 if "total_pnl_pips" not in st.session_state:
-    st.session_state.total_pnl_pips = 0.0  # 累計獲得pips
+    st.session_state.total_pnl_pips = 0.0
 
 # データ取得
 df_htf, df_ltf = load_data(symbol)
@@ -114,7 +113,7 @@ now_str = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
 # 🤖 仮想トレード実行エンジン (自動エントリー＆決済)
 # ---------------------------------------------------------
 
-# 1. 決済判定（ポジション保有中の場合）
+# 1. 決済判定
 if st.session_state.position is not None:
     pos = st.session_state.position
     pnl_pips = 0.0
@@ -137,11 +136,9 @@ if st.session_state.position is not None:
             pnl_pips = (pos["entry_price"] - pos["sl"]) * 100
 
     if closed:
-        # 損益金額計算 (1万通貨換算: 1pip = 100円)
         pnl_jpy = pnl_pips * 100 * lot_size
         st.session_state.total_pnl_pips += pnl_pips
         
-        # 履歴追加
         st.session_state.trade_history.insert(0, {
             "エントリー日時": pos["entry_time"],
             "決済日時": now_str,
@@ -153,9 +150,9 @@ if st.session_state.position is not None:
             "獲得pips": f"{pnl_pips:+.1f}",
             "損益金額(円)": f"{pnl_jpy:+,.0f}円"
         })
-        st.session_state.position = None # ポジションクリア
+        st.session_state.position = None
 
-# 2. 新規エントリー判定（ポジション未保有で BUY/SELL 発令時）
+# 2. 新規エントリー判定
 elif st.session_state.position is None and signal in ["BUY", "SELL"]:
     _, tp_val, sl_val = query_ai(signal, current_price, df_ltf, reason)
     if tp_val and sl_val:
@@ -175,37 +172,33 @@ st.title("🤖 FX AI 仮想自動売買モニター")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
 col2.metric("売買判定", signal)
-col3.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
-col4.metric("最終更新", now_str.split()[1])
+col3.metric("ボラティリティ / 閾値", f"{pips_range:.1f} / {min_pips:.1f} pips")
+col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 
 st.markdown("---")
 
-# 現在保有中の仮想ポジション表示
+# ① シグナル状態のメッセージ表示 (復元)
+if signal == "BUY":
+    st.success(f"🟢 **【買いシグナル発令】** {reason}")
+elif signal == "SELL":
+    st.error(f"🔴 **【売りシグナル発令】** {reason}")
+else:
+    st.info(f"⚪ **【様子見】** {reason}")
+
+# ② 現在保有中の仮想ポジション表示
 if st.session_state.position:
     pos = st.session_state.position
-    st.warning(f"⚡ **【仮想ポジション保有中】** {pos['side']} @ `{pos['entry_price']:.3f}` | **TP**: `{pos['tp']:.3f}` | **SL**: `{pos['sl']:.3f}`")
-else:
-    st.info("💤 **【ポジションなし】** 次のシグナル発生を自動監視中...")
-
-# ---------------------------------------------------------
-# 📋 取引履歴の一覧表 (ペーパートレード結果)
-# ---------------------------------------------------------
-st.subheader("📋 仮想トレード取引履歴一覧")
-
-if st.session_state.trade_history:
-    df_history = pd.DataFrame(st.session_state.trade_history)
-    st.dataframe(df_history, use_container_width=True)
-else:
-    st.caption("※まだ取引履歴はありません。シグナルが発生して売買が決済されると自動で一覧に追加されます。")
+    st.warning(f"⚡ **【仮想ポジション保有中】** {pos['side']} @ `{pos['entry_price']:.3f}` | **TP (利確)**: `{pos['tp']:.3f}` | **SL (損切)**: `{pos['sl']:.3f}`")
 
 # ---------------------------------------------------------
 # 📈 テクニカル分析チャート
 # ---------------------------------------------------------
-st.subheader("📈 リアルタイムチャート")
+st.subheader("📈 5分足テクニカル分析チャート")
 
 fig = go.Figure()
 df_plot = df_ltf.tail(60)
 
+# ローソク足
 fig.add_trace(go.Candlestick(
     x=df_plot.index, open=df_plot['Open'], high=df_plot['High'],
     low=df_plot['Low'], close=df_plot['Close'], name="USD/JPY 5分足"
@@ -217,18 +210,45 @@ fig.add_trace(go.Scatter(
     line=dict(color='#FFD700', width=1.5)
 ))
 
-# 現在値
-fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5, annotation_text=f"現在値: {current_price:.3f}")
+# 分析ライン1：ブレイクライン（直近高値・安値） (復元)
+fig.add_hline(y=prev_high, line_dash="dot", line_color="#FF4B4B", line_width=1,
+              annotation_text=f"直近高値(上抜け買い): {prev_high:.3f}", annotation_position="top right")
 
-# ポジション保有時はエントリー線・TP・SLを描画
+fig.add_hline(y=prev_low, line_dash="dot", line_color="#0080FF", line_width=1,
+              annotation_text=f"直近安値(下抜け売り): {prev_low:.3f}", annotation_position="bottom right")
+
+# 分析ライン2：現在値
+fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
+              annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
+
+# 分析ライン3：保有ポジション・TP・SLライン
 if st.session_state.position:
     pos = st.session_state.position
-    fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="white", line_width=2, annotation_text=f"保有位置: {pos['entry_price']:.3f}")
-    fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2, annotation_text=f"TP (利確): {pos['tp']:.3f}")
-    fig.add_hline(y=pos["sl"], line_dash="dash", line_color="#FF0055", line_width=2, annotation_text=f"SL (損切): {pos['sl']:.3f}")
+    fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="white", line_width=2,
+                  annotation_text=f"保有位置: {pos['entry_price']:.3f}", annotation_position="bottom right")
+    fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2,
+                  annotation_text=f"🎯 TP (利確): {pos['tp']:.3f}", annotation_position="bottom left")
+    fig.add_hline(y=pos["sl"], line_dash="dash", line_color="#FF0055", line_width=2,
+                  annotation_text=f"🛑 SL (損切): {pos['sl']:.3f}", annotation_position="bottom left")
 
-fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=480, margin=dict(l=20, r=20, t=30, b=20))
+fig.update_layout(
+    xaxis_rangeslider_visible=False, template="plotly_dark", height=500,
+    margin=dict(l=20, r=20, t=30, b=20),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
+
 st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------
+# 📋 取引履歴の一覧表
+# ---------------------------------------------------------
+st.subheader("📋 仮想トレード取引履歴一覧")
+
+if st.session_state.trade_history:
+    df_history = pd.DataFrame(st.session_state.trade_history)
+    st.dataframe(df_history, use_container_width=True)
+else:
+    st.caption("※まだ取引履歴はありません。シグナルが発生して売買が決済されると自動で一覧に追加されます。")
 
 # 画面自動更新
 time.sleep(refresh_rate)
