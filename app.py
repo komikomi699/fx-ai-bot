@@ -10,23 +10,23 @@ import yfinance as yf
 import plotly.graph_objects as go
 from openai import OpenAI
 
-# タイムゾーン設定（日本時間）
+# =========================================================
+# 1. 基本設定・定数定義
+# =========================================================
 JST = pytz.timezone('Asia/Tokyo')
 CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-# ページ設定
-st.set_page_config(page_title="FX AI 仮想自動売買モニター", layout="wide")
+st.set_page_config(page_title="FX AI 仮想自動売買モニター V3", layout="wide")
 
-# OpenAI API Key設定
 api_key = os.environ.get("OPENAI_API_KEY", "")
 if not api_key and "OPENAI_API_KEY" in st.secrets:
     api_key = st.secrets["OPENAI_API_KEY"]
 
-# ---------------------------------------------------------
-# 💾 設定・データファイルの読み書き関数
-# ---------------------------------------------------------
+# =========================================================
+# 2. 設定およびポジションデータのファイル管理関数
+# =========================================================
 def load_config():
     default_config = {
         "symbol": "USDJPY=X",
@@ -81,20 +81,18 @@ def load_history_from_csv():
             return [], 0.0
     return [], 0.0
 
-# 保存されている設定の読み込み
 saved_config = load_config()
 
-# ---------------------------------------------------------
-# ⚙️ サイドバー（設定入力）
-# ---------------------------------------------------------
-st.sidebar.title("⚙️ 仮想トレード設定")
+# =========================================================
+# 3. サイドバー設定メニュー
+# =========================================================
+st.sidebar.title("⚙️ 仮想トレード設定 (V3)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
 lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=float(saved_config["lot_size"]), step=0.1)
 refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=1, max_value=15, value=int(saved_config["refresh_rate"]))
 
-# 設定値が変更されたら自動保存
 current_config = {
     "symbol": symbol,
     "min_pips": min_pips,
@@ -104,7 +102,6 @@ current_config = {
 if current_config != saved_config:
     save_config(current_config)
 
-# リセット機能
 if st.sidebar.button("🗑️ 取引履歴＆設定をリセット"):
     for file_path in [CSV_FILE, CONFIG_FILE, POSITION_FILE]:
         if os.path.exists(file_path):
@@ -122,15 +119,15 @@ if not api_key:
 
 client = OpenAI(api_key=api_key) if api_key else None
 
-# ---------------------------------------------------------
-# 📊 データ取得 & 分析ロジック（日足・1時間足・5分足を取得）
-# ---------------------------------------------------------
+# =========================================================
+# 4. マルチタイムフレームデータ取得・テクニカル分析
+# =========================================================
 @st.cache_data(ttl=1)
 def load_data(sym):
     ticker = yf.Ticker(sym)
-    df_daily = ticker.history(period="1mo", interval="1d") # 日足（大局観用）
-    df_htf = ticker.history(period="7d", interval="1h")    # 1時間足（中期環境認識用）
-    df_ltf = ticker.history(period="1d", interval="5m")    # 5分足（エントリー用）
+    df_daily = ticker.history(period="1mo", interval="1d")
+    df_htf = ticker.history(period="7d", interval="1h")
+    df_ltf = ticker.history(period="1d", interval="5m")
     
     if not df_daily.empty:
         df_daily.index = df_daily.index.tz_convert(JST)
@@ -142,11 +139,9 @@ def load_data(sym):
     return df_daily, df_htf, df_ltf
 
 def analyze(df_daily, df_htf, df_ltf, threshold_pips):
-    # 1時間足のテクニカル計算
     df_htf['sma20'] = df_htf['Close'].rolling(window=20).mean()
     htf_trend = "UP" if df_htf['Close'].iloc[-1] > df_htf['sma20'].iloc[-1] else "DOWN"
 
-    # 5分足のテクニカル計算
     df_ltf['sma20'] = df_ltf['Close'].rolling(window=20).mean()
     df_ltf['high_max'] = df_ltf['High'].rolling(10).max()
     df_ltf['low_min'] = df_ltf['Low'].rolling(10).min()
@@ -167,16 +162,15 @@ def analyze(df_daily, df_htf, df_ltf, threshold_pips):
 
     return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low
 
-# ---------------------------------------------------------
-# 🤖 AI問い合わせ（複数足の全体状況を踏まえてTP/SLを決定）
-# ---------------------------------------------------------
+# =========================================================
+# 5. AIによる「世界情勢・ニュース・投資家心理＋テクニカル」総合評価
+# =========================================================
 def query_ai(signal, price, df_daily, df_htf, df_ltf, reason):
     if not client:
         tp = price + 0.15 if signal == "BUY" else price - 0.15
         sl = price - 0.10 if signal == "BUY" else price + 0.10
         return "APIキー未設定のためデフォルト値(TP:+15pips/SL:-10pips)を使用", tp, sl
 
-    # 各時間足の情報サマリーを作成
     daily_close = df_daily['Close'].iloc[-1]
     daily_sma20 = df_daily['Close'].rolling(20).mean().iloc[-1] if len(df_daily) >= 20 else daily_close
     daily_high_5d = df_daily['High'].tail(5).max()
@@ -190,40 +184,42 @@ def query_ai(signal, price, df_daily, df_htf, df_ltf, reason):
     recent_5m = df_ltf.tail(5)[['Open', 'High', 'Low', 'Close']].to_string()
 
     prompt = f"""
-あなたはプロのFXトレーダーです。単一の時間足だけでなく、日足・1時間足・5分足のマルチタイムフレーム分析（全体像）を行なった上で、最も優位性の高い利確(TP)と損切(SL)を決定してください。
+あなたはFXのトップヘッジファンドトレーダーおよびマクロ経済アナリストです。
+テクニカル指標（チャート）だけでなく、背景にある「世界情勢・金融政策のトレンド・主要ニュース・投資家の心理（リスクオン/リスクオフ）」を総合的に考慮して、売買判断の最終チェックおよび利確(TP)と損切(SL)の数値を算定してください。
 
-【通貨ペア】 USD/JPY
-【売買シグナル】 {signal}
+【対象通貨ペア】 USD/JPY
+【シグナル候補】 {signal}
 【現在価格】 {price:.3f}
-【シグナル発生理由】 {reason}
+【テクニカル上の理由】 {reason}
 
---- 市場全体の状況 ---
+--- テクニカルデータ ---
 1. 日足（長期環境）:
-   - 直近終値: {daily_close:.3f}
-   - 日足20SMA: {daily_sma20:.3f} (位置関係: {'SMAの上' if daily_close > daily_sma20 else 'SMAの下'})
-   - 直近5日間の最高値: {daily_high_5d:.3f} / 最安値: {daily_low_5d:.3f}
+   - 終値: {daily_close:.3f} / 20SMA: {daily_sma20:.3f}
+   - 5日高値: {daily_high_5d:.3f} / 5日安値: {daily_low_5d:.3f}
 
 2. 1時間足（中期環境）:
-   - 直近終値: {htf_close:.3f}
-   - 1時間足20SMA: {htf_sma20:.3f}
-   - 直近24時間の最高値: {htf_high_24h:.3f} / 最安値: {htf_low_24h:.3f}
+   - 終値: {htf_close:.3f} / 20SMA: {htf_sma20:.3f}
+   - 24時間高値: {htf_high_24h:.3f} / 24時間安値: {htf_low_24h:.3f}
 
-3. 5分足（短期エントリー足・直近5本データ）:
+3. 5分足（直近5本）:
 {recent_5m}
 
---- 要求事項 ---
-長期・中期のレジスタンス/サポートラインやトレンドの強さを考慮し、無駄な損切りにかからず、かつリスクリワード比の優れたTP/SLを設定してください。
+--- 分析・推論の指示 ---
+1. **ファンダメンタルズ & 投資家心理**: 
+   現在の米日金利差の動向、FRB・日銀の政策スタンス、地政学リスク、市場の投資家心理（タカ派/ハト派、リスクオン/リスクオフ）がドル円に与える影響を整理してください。
+2. **総合判断**:
+   テクニカルの売買方向（{signal}）がファンダメンタルズや市場心理と合致しているか評価してください。もし大きく逆行するリスクがある場合は、利確幅を狭く（または損切り幅をきつく）調整してください。
 
 【出力形式】
 TP: <数値>
 SL: <数値>
-理由: <全体像（日足・1時間足・5分足の整合性）を踏まえた計算根拠を簡潔に>
+分析・理由: <ファンダメンタルズ/投資家心理とテクニカルをあわせた総合判断の解説を簡潔に>
 """
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2
+        temperature=0.3
     )
     text = res.choices[0].message.content
     
@@ -235,7 +231,9 @@ SL: <数値>
 
     return text, tp_val, sl_val
 
-# --- 状態復元 ---
+# =========================================================
+# 6. セッション状態初期化 & データ取得
+# =========================================================
 if "position" not in st.session_state:
     st.session_state.position = load_position()
 
@@ -244,17 +242,14 @@ if "trade_history" not in st.session_state or "total_pnl_pips" not in st.session
     st.session_state.trade_history = history
     st.session_state.total_pnl_pips = total_pips
 
-# データ取得
 df_daily, df_htf, df_ltf = load_data(symbol)
 signal, reason, pips_range, prev_high, prev_low = analyze(df_daily, df_htf, df_ltf, min_pips)
 current_price = df_ltf['Close'].iloc[-1]
 now_jst_str = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
 
-# ---------------------------------------------------------
-# 🤖 仮想トレード実行エンジン (自動エントリー＆決済)
-# ---------------------------------------------------------
-
-# 1. 決済判定
+# =========================================================
+# 7. 自動売買実行エンジン
+# =========================================================
 if st.session_state.position is not None:
     pos = st.session_state.position
     pnl_pips = 0.0
@@ -294,15 +289,12 @@ if st.session_state.position is not None:
         
         st.session_state.trade_history.insert(0, new_record)
         
-        # CSVへ保存
         df_to_save = pd.DataFrame(st.session_state.trade_history)
         df_to_save.to_csv(CSV_FILE, index=False)
 
-        # ポジションクリア＆ファイル更新
         st.session_state.position = None
         save_position(None)
 
-# 2. 新規エントリー判定（マルチタイムフレーム分析を適用）
 elif st.session_state.position is None and signal in ["BUY", "SELL"]:
     ai_reason, tp_val, sl_val = query_ai(signal, current_price, df_daily, df_htf, df_ltf, reason)
     if tp_val and sl_val:
@@ -317,10 +309,10 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
         st.session_state.position = new_pos
         save_position(new_pos)
 
-# ---------------------------------------------------------
-# 📊 UI表示部
-# ---------------------------------------------------------
-st.title("🤖 FX AI 仮想自動売買モニター")
+# =========================================================
+# 8. メインダッシュボードUI表示
+# =========================================================
+st.title("🤖 FX AI 仮想自動売買モニター V3")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -331,9 +323,7 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# ---------------------------------------------------------
-# ⚡ 含み損益パネル
-# ---------------------------------------------------------
+# 評価損益・ポジション情報カード
 if st.session_state.position:
     pos = st.session_state.position
     if pos["side"] == "BUY":
@@ -377,10 +367,13 @@ if st.session_state.position:
                     </span>
                 </div>
             </div>
-            <div style="font-size: 1.0rem; color: #0f172a; border-top: 1px solid rgba(0,0,0,0.12); padding-top: 10px; font-weight: 500;">
+            <div style="font-size: 1.0rem; color: #0f172a; border-top: 1px solid rgba(0,0,0,0.12); padding-top: 10px; margin-bottom: 10px; font-weight: 500;">
                 保有ポジション: <b>{pos['side']}</b> @ <code>{pos['entry_price']:.3f}</code> ｜ 
                 <b>TP (利確)</b>: <code>{pos['tp']:.3f}</code> ｜ 
                 <b>SL (損切)</b>: <code>{pos['sl']:.3f}</code>
+            </div>
+            <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.6); padding: 10px; border-radius: 6px;">
+                🧠 <b>AI分析（情勢・心理・テクニカル総合）:</b><br>{pos.get('ai_reason', 'なし')}
             </div>
         </div>
         """,
@@ -394,9 +387,9 @@ else:
     else:
         st.info(f"⚪ **【様子見】** {reason}")
 
-# ---------------------------------------------------------
-# 📈 テクニカル分析チャート
-# ---------------------------------------------------------
+# =========================================================
+# 9. インタラクティブ・チャート描画
+# =========================================================
 st.subheader("📈 5分足テクニカル分析チャート (JST)")
 
 fig = go.Figure()
@@ -454,9 +447,9 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------
-# 📋 取引履歴の一覧表
-# ---------------------------------------------------------
+# =========================================================
+# 10. 取引履歴表示
+# =========================================================
 st.subheader("📋 仮想トレード取引履歴一覧 (完全永続化)")
 
 if st.session_state.trade_history:
