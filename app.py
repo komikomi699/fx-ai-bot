@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.6", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.7", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.6)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.7)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=0.5)
@@ -181,7 +181,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
     if signal_type == "BUY":
         tp = price + 0.15
         sl = price - 0.10
-        psychology = "【強気買い心理】" if rsi < 70 else "【買われすぎ警戒（過熱）】"
+        psychology = "強気買い心理" if rsi < 70 else "買われすぎ警戒（過熱）"
         reason_str = (
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
@@ -191,7 +191,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
     elif signal_type == "SELL":
         tp = price - 0.15
         sl = price + 0.10
-        psychology = "【強気売り心理】" if rsi > 30 else "【売られすぎ警戒（パニック売り）】"
+        psychology = "強気売り心理" if rsi > 30 else "売られすぎ警戒（パニック売り）"
         reason_str = (
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
@@ -202,7 +202,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
         tp, sl = price + 0.15, price - 0.10
         reason_str = (
             f"時間帯: {market_zone}\n"
-            f"RSI(14): {rsi:.1f} → 【中立・様子見心理】\n"
+            f"RSI(14): {rsi:.1f} → 中立・様子見心理\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
             f"→ ブレイク条件未達成のため静観中。"
         )
@@ -241,17 +241,17 @@ if st.session_state.position is not None:
 
     if pos["side"] == "BUY":
         if current_price >= pos["tp"]:
-            closed, close_reason = True, "🎯 利確 (TP到達)"
+            closed, close_reason = True, "利確 (TP到達)"
             pnl_pips = (pos["tp"] - pos["entry_price"]) * 100
         elif current_price <= pos["sl"]:
-            closed, close_reason = True, "🛑 損切 (SL到達)"
+            closed, close_reason = True, "損切 (SL到達)"
             pnl_pips = (pos["sl"] - pos["entry_price"]) * 100
     elif pos["side"] == "SELL":
         if current_price <= pos["tp"]:
-            closed, close_reason = True, "🎯 利確 (TP到達)"
+            closed, close_reason = True, "利確 (TP到達)"
             pnl_pips = (pos["entry_price"] - pos["tp"]) * 100
         elif current_price >= pos["sl"]:
-            closed, close_reason = True, "🛑 損切 (SL到達)"
+            closed, close_reason = True, "損切 (SL到達)"
             pnl_pips = (pos["entry_price"] - pos["sl"]) * 100
 
     if closed:
@@ -292,7 +292,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.6")
+st.title("🤖 FX 仮想自動売買モニター V4.7")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -314,7 +314,7 @@ if st.session_state.position:
 
     pnl_color = "#059669" if unrealized_pips >= 0 else "#dc2626"
     bg_color = "rgba(16, 185, 129, 0.08)" if unrealized_pips >= 0 else "rgba(239, 68, 68, 0.08)"
-    status_icon = "📈 含み益" if unrealized_pips >= 0 else "📉 含み損"
+    status_icon = "含み益" if unrealized_pips >= 0 else "含み損"
     analysis_text = pos.get('ai_reason', '')
 
     st.markdown(
@@ -353,7 +353,7 @@ else:
         f"""
         <div style="background-color: rgba(59, 130, 246, 0.06); border: 2px solid #3b82f6; border-radius: 12px; padding: 20px 25px; margin-bottom: 20px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <span style="color: #2563eb; font-weight: bold; font-size: 1.2rem;">⚪ 様子見中（シグナル監視・エントリー待機）</span>
+                <span style="color: #2563eb; font-weight: bold; font-size: 1.2rem;">様子見中（シグナル監視・エントリー待機）</span>
                 <span style="color: #334155; font-size: 0.95rem; font-weight: 600;">判定理由: <b>{reason}</b></span>
             </div>
             <div style="font-size: 0.95rem; color: #1e293b; background: rgba(255,255,255,0.85); padding: 14px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #3b82f6;">
@@ -387,25 +387,25 @@ fig.add_trace(go.Scatter(
     line=dict(color='#FFD700', width=1.5)
 ))
 
-# 直近高値・安値ライン（様子見中でも常にエントリー予定のブレイクラインとして表示）
+# 直近高値・安値ライン
 fig.add_hline(y=prev_high, line_dash="dash", line_color="#FF4B4B", line_width=1.5,
-              annotation_text=f"🎯 買いエントリー予定(高値): {prev_high:.3f}", annotation_position="top right")
+              annotation_text=f"Buy Target: {prev_high:.3f}", annotation_position="top right")
 
 fig.add_hline(y=prev_low, line_dash="dash", line_color="#0080FF", line_width=1.5,
-              annotation_text=f"🎯 売りエントリー予定(安値): {prev_low:.3f}", annotation_position="bottom right")
+              annotation_text=f"Sell Target: {prev_low:.3f}", annotation_position="bottom right")
 
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
-              annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
+              annotation_text=f"Current: {current_price:.3f}", annotation_position="top left")
 
 # ポジション保有時はエントリー、TP、SLを強調描写
 if st.session_state.position:
     pos = st.session_state.position
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="#FFFFFF", line_width=2.5,
-                  annotation_text=f"📍 エントリー ({pos['side']}): {pos['entry_price']:.3f}", annotation_position="middle left")
+                  annotation_text=f"Entry ({pos['side']}): {pos['entry_price']:.3f}", annotation_position="middle left")
     fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2,
-                  annotation_text=f"🎯 TP (利確): {pos['tp']:.3f}", annotation_position="bottom left")
+                  annotation_text=f"TP: {pos['tp']:.3f}", annotation_position="bottom left")
     fig.add_hline(y=pos["sl"], line_dash="dash", line_color="#FF0055", line_width=2,
-                  annotation_text=f"🛑 SL (損切): {pos['sl']:.3f}", annotation_position="bottom left")
+                  annotation_text=f"SL: {pos['sl']:.3f}", annotation_position="bottom left")
 
 fig.update_layout(
     xaxis_rangeslider_visible=False, template="plotly_dark", height=500,
