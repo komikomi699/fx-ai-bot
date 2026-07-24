@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.3", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.4", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -24,9 +24,9 @@ st.set_page_config(page_title="FX 仮想自動売買モニター V4.3", layout="
 def load_config():
     default_config = {
         "symbol": "USDJPY=X",
-        "min_pips": 10.0,
+        "min_pips": 5.0,  # トレードされやすくするためデフォルトを少し緩和
         "lot_size": 1.0,
-        "refresh_rate": 1
+        "refresh_rate": 3
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -80,10 +80,10 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.3)")
+st.sidebar.title("⚙️ 仮想トレード設定 (V4.4)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
-min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=1.0)
+min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=0.5)
 lot_size = st.sidebar.number_input("取引数量 (万通貨)", value=float(saved_config["lot_size"]), step=0.1)
 refresh_rate = st.sidebar.slider("更新間隔 (秒)", min_value=1, max_value=15, value=int(saved_config["refresh_rate"]))
 
@@ -109,23 +109,26 @@ if st.sidebar.button("🗑️ 取引履歴＆設定をリセット"):
 # =========================================================
 # 4. データ取得 & テクニカル分析
 # =========================================================
-@st.cache_data(ttl=1)
+@st.cache_data(ttl=5)
 def load_data(sym):
     ticker = yf.Ticker(sym)
     df_daily = ticker.history(period="1mo", interval="1d")
     df_htf = ticker.history(period="7d", interval="1h")
     df_ltf = ticker.history(period="1d", interval="5m")
     
-    if not df_daily.empty:
+    if not df_daily.empty and df_daily.index.tz is not None:
         df_daily.index = df_daily.index.tz_convert(JST)
-    if not df_htf.empty:
+    if not df_htf.empty and df_htf.index.tz is not None:
         df_htf.index = df_htf.index.tz_convert(JST)
-    if not df_ltf.empty:
+    if not df_ltf.empty and df_ltf.index.tz is not None:
         df_ltf.index = df_ltf.index.tz_convert(JST)
         
     return df_daily, df_htf, df_ltf
 
 def analyze(df_daily, df_htf, df_ltf, threshold_pips):
+    if df_htf.empty or df_ltf.empty:
+        return "HOLD", "データ取得待ち", 0.0, 0.0, 0.0
+
     df_htf['sma20'] = df_htf['Close'].rolling(window=20).mean()
     htf_trend = "UP" if df_htf['Close'].iloc[-1] > df_htf['sma20'].iloc[-1] else "DOWN"
 
@@ -150,9 +153,12 @@ def analyze(df_daily, df_htf, df_ltf, threshold_pips):
     return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low
 
 # =========================================================
-# 5. 情勢トレンド・投資家心理ロジック（API非依存エンジン）
+# 5. 情勢トレンド・投資家心理ロジック
 # =========================================================
 def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
+    if df_ltf.empty or df_daily.empty:
+        return "データ集計中...", price + 0.15, price - 0.10
+
     delta = df_ltf['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -180,7 +186,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
-            f"→ 中期上昇心理に素直に従いエントリー。利確(+15pips) / 損切(-10pips)をセット。"
+            f"→ 中期上昇心理に従いエントリー。利確(+15pips) / 損切(-10pips)。"
         )
     elif signal_type == "SELL":
         tp = price - 0.15
@@ -190,7 +196,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
-            f"→ 下降モメンタム優勢と判断。利確(+15pips) / 損切(-10pips)をセット。"
+            f"→ 下降モメンタム優勢。利確(-15pips) / 損切(+10pips)。"
         )
     else:
         tp, sl = price, price
@@ -198,7 +204,7 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → 【中立・様子見心理】\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
-            f"→ 現在はブレイク条件未達成のため静観中。ボラティリティや方向性が揃うのを待っています。"
+            f"→ ブレイク条件未達成のため静観中。"
         )
 
     return reason_str, tp, sl
@@ -216,7 +222,12 @@ if "trade_history" not in st.session_state or "total_pnl_pips" not in st.session
 
 df_daily, df_htf, df_ltf = load_data(symbol)
 signal, reason, pips_range, prev_high, prev_low = analyze(df_daily, df_htf, df_ltf, min_pips)
-current_price = df_ltf['Close'].iloc[-1]
+
+if not df_ltf.empty:
+    current_price = df_ltf['Close'].iloc[-1]
+else:
+    current_price = 150.0  フォールバック
+
 now_jst_str = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
 
 # =========================================================
@@ -260,9 +271,7 @@ if st.session_state.position is not None:
         }
         
         st.session_state.trade_history.insert(0, new_record)
-        
-        df_to_save = pd.DataFrame(st.session_state.trade_history)
-        df_to_save.to_csv(CSV_FILE, index=False)
+        pd.DataFrame(st.session_state.trade_history).to_csv(CSV_FILE, index=False)
 
         st.session_state.position = None
         save_position(None)
@@ -283,7 +292,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.3")
+st.title("🤖 FX 仮想自動売買モニター V4.4")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -294,7 +303,7 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# 評価損益・ポジション情報カード ＆ 常時分析表示枠
+# ポジション状態・様子見表示カード
 if st.session_state.position:
     pos = st.session_state.position
     if pos["side"] == "BUY":
@@ -308,8 +317,6 @@ if st.session_state.position:
     status_icon = "📈 含み益" if unrealized_pips >= 0 else "📉 含み損"
 
     analysis_text = pos.get('ai_reason', '')
-    if not analysis_text:
-        analysis_text, _, _ = calculate_market_sentiment(pos["side"], pos["entry_price"], df_daily, df_htf, df_ltf)
 
     st.markdown(
         f"""
@@ -348,7 +355,7 @@ if st.session_state.position:
                 <b>SL (損切)</b>: <code>{pos['sl']:.3f}</code>
             </div>
             <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.7); padding: 12px; border-radius: 6px; white-space: pre-wrap;">
-📊 <b>市場センチメント・時間帯構造分析:</b><br>{analysis_text}
+📊 <b>市場センチメント分析:</b><br>{analysis_text}
             </div>
         </div>
         """,
@@ -356,7 +363,6 @@ if st.session_state.position:
     )
 else:
     hold_reason, _, _ = calculate_market_sentiment("HOLD", current_price, df_daily, df_htf, df_ltf)
-    
     st.markdown(
         f"""
         <div style="
@@ -375,7 +381,7 @@ else:
                 </span>
             </div>
             <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.7); padding: 12px; border-radius: 6px; white-space: pre-wrap;">
-📊 <b>市場センチメント・時間帯構造分析:</b><br>{hold_reason}
+📊 <b>市場センチメント分析:</b><br>{hold_reason}
             </div>
         </div>
         """,
@@ -409,28 +415,19 @@ fig.add_hline(y=prev_low, line_dash="dot", line_color="#0080FF", line_width=1,
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
 
+# ポジション保有時はエントリーポイントとTP/SLを明確にチャートに指し示す
 if st.session_state.position:
     pos = st.session_state.position
-    entry_time_dt = pd.to_datetime(pos["entry_time"]).tz_localize(JST)
-
-    marker_symbol = "triangle-up" if pos["side"] == "BUY" else "triangle-down"
-    marker_color = "#0080FF" if pos["side"] == "BUY" else "#FF4B4B"
-    marker_name = f"エントリー ({pos['side']})"
-
-    fig.add_trace(go.Scatter(
-        x=[entry_time_dt],
-        y=[pos["entry_price"]],
-        mode="markers+text",
-        marker=dict(symbol=marker_symbol, size=14, color=marker_color),
-        text=[f"  {pos['side']} @ {pos['entry_price']:.3f}"],
-        textposition="top right" if pos["side"] == "BUY" else "bottom right",
-        name=marker_name
-    ))
-
-    fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="white", line_width=2,
-                  annotation_text=f"保有位置: {pos['entry_price']:.3f}", annotation_position="bottom right")
+    
+    # エントリーラインの描画（太い白色の線で指し示す）
+    fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="#FFFFFF", line_width=2.5,
+                  annotation_text=f"📍 エントリー ({pos['side']}): {pos['entry_price']:.3f}", annotation_position="middle left")
+    
+    # 利確 (TP) ライン
     fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2,
                   annotation_text=f"🎯 TP (利確): {pos['tp']:.3f}", annotation_position="bottom left")
+    
+    # 損切 (SL) ライン
     fig.add_hline(y=pos["sl"], line_dash="dash", line_color="#FF0055", line_width=2,
                   annotation_text=f"🛑 SL (損切): {pos['sl']:.3f}", annotation_position="bottom left")
 
@@ -440,7 +437,9 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
-st.plotly_chart(fig, use_container_width=True)
+# ちらつき防止のための config 設定（画面再描画時のアニメーションを無効化）
+config = {'displayModeBar': True, 'staticPlot': False}
+st.plotly_chart(fig, use_container_width=True, config=config)
 
 # =========================================================
 # 10. 取引履歴表示
