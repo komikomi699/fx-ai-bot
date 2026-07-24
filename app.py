@@ -123,25 +123,30 @@ if not api_key:
 client = OpenAI(api_key=api_key) if api_key else None
 
 # ---------------------------------------------------------
-# 📊 データ取得 & 分析ロジック
+# 📊 データ取得 & 分析ロジック（日足・1時間足・5分足を取得）
 # ---------------------------------------------------------
 @st.cache_data(ttl=1)
 def load_data(sym):
     ticker = yf.Ticker(sym)
-    df_htf = ticker.history(period="7d", interval="1h")
-    df_ltf = ticker.history(period="1d", interval="5m")
+    df_daily = ticker.history(period="1mo", interval="1d") # 日足（大局観用）
+    df_htf = ticker.history(period="7d", interval="1h")    # 1時間足（中期環境認識用）
+    df_ltf = ticker.history(period="1d", interval="5m")    # 5分足（エントリー用）
     
+    if not df_daily.empty:
+        df_daily.index = df_daily.index.tz_convert(JST)
     if not df_htf.empty:
         df_htf.index = df_htf.index.tz_convert(JST)
     if not df_ltf.empty:
         df_ltf.index = df_ltf.index.tz_convert(JST)
         
-    return df_htf, df_ltf
+    return df_daily, df_htf, df_ltf
 
-def analyze(df_htf, df_ltf, threshold_pips):
+def analyze(df_daily, df_htf, df_ltf, threshold_pips):
+    # 1時間足のテクニカル計算
     df_htf['sma20'] = df_htf['Close'].rolling(window=20).mean()
     htf_trend = "UP" if df_htf['Close'].iloc[-1] > df_htf['sma20'].iloc[-1] else "DOWN"
 
+    # 5分足のテクニカル計算
     df_ltf['sma20'] = df_ltf['Close'].rolling(window=20).mean()
     df_ltf['high_max'] = df_ltf['High'].rolling(10).max()
     df_ltf['low_min'] = df_ltf['Low'].rolling(10).min()
@@ -162,24 +167,59 @@ def analyze(df_htf, df_ltf, threshold_pips):
 
     return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low
 
-def query_ai(signal, price, df_ltf, reason):
+# ---------------------------------------------------------
+# 🤖 AI問い合わせ（複数足の全体状況を踏まえてTP/SLを決定）
+# ---------------------------------------------------------
+def query_ai(signal, price, df_daily, df_htf, df_ltf, reason):
     if not client:
         tp = price + 0.15 if signal == "BUY" else price - 0.15
         sl = price - 0.10 if signal == "BUY" else price + 0.10
         return "APIキー未設定のためデフォルト値(TP:+15pips/SL:-10pips)を使用", tp, sl
 
-    recent = df_ltf.tail(5)[['Open', 'High', 'Low', 'Close']].to_string()
-    prompt = f"""
-    FXスキャルピングの利確(TP)と損切(SL)を計算してください。
-    通貨ペア: USD/JPY, シグナル: {signal}, 現在値: {price:.3f}
-    直近5分足データ:
-    {recent}
+    # 各時間足の情報サマリーを作成
+    daily_close = df_daily['Close'].iloc[-1]
+    daily_sma20 = df_daily['Close'].rolling(20).mean().iloc[-1] if len(df_daily) >= 20 else daily_close
+    daily_high_5d = df_daily['High'].tail(5).max()
+    daily_low_5d = df_daily['Low'].tail(5).min()
 
-    【出力形式】
-    TP: <数値>
-    SL: <数値>
-    理由: <簡潔に>
-    """
+    htf_close = df_htf['Close'].iloc[-1]
+    htf_sma20 = df_htf['sma20'].iloc[-1]
+    htf_high_24h = df_htf['High'].tail(24).max()
+    htf_low_24h = df_htf['Low'].tail(24).min()
+
+    recent_5m = df_ltf.tail(5)[['Open', 'High', 'Low', 'Close']].to_string()
+
+    prompt = f"""
+あなたはプロのFXトレーダーです。単一の時間足だけでなく、日足・1時間足・5分足のマルチタイムフレーム分析（全体像）を行なった上で、最も優位性の高い利確(TP)と損切(SL)を決定してください。
+
+【通貨ペア】 USD/JPY
+【売買シグナル】 {signal}
+【現在価格】 {price:.3f}
+【シグナル発生理由】 {reason}
+
+--- 市場全体の状況 ---
+1. 日足（長期環境）:
+   - 直近終値: {daily_close:.3f}
+   - 日足20SMA: {daily_sma20:.3f} (位置関係: {'SMAの上' if daily_close > daily_sma20 else 'SMAの下'})
+   - 直近5日間の最高値: {daily_high_5d:.3f} / 最安値: {daily_low_5d:.3f}
+
+2. 1時間足（中期環境）:
+   - 直近終値: {htf_close:.3f}
+   - 1時間足20SMA: {htf_sma20:.3f}
+   - 直近24時間の最高値: {htf_high_24h:.3f} / 最安値: {htf_low_24h:.3f}
+
+3. 5分足（短期エントリー足・直近5本データ）:
+{recent_5m}
+
+--- 要求事項 ---
+長期・中期のレジスタンス/サポートラインやトレンドの強さを考慮し、無駄な損切りにかからず、かつリスクリワード比の優れたTP/SLを設定してください。
+
+【出力形式】
+TP: <数値>
+SL: <数値>
+理由: <全体像（日足・1時間足・5分足の整合性）を踏まえた計算根拠を簡潔に>
+"""
+
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -205,8 +245,8 @@ if "trade_history" not in st.session_state or "total_pnl_pips" not in st.session
     st.session_state.total_pnl_pips = total_pips
 
 # データ取得
-df_htf, df_ltf = load_data(symbol)
-signal, reason, pips_range, prev_high, prev_low = analyze(df_htf, df_ltf, min_pips)
+df_daily, df_htf, df_ltf = load_data(symbol)
+signal, reason, pips_range, prev_high, prev_low = analyze(df_daily, df_htf, df_ltf, min_pips)
 current_price = df_ltf['Close'].iloc[-1]
 now_jst_str = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -262,19 +302,20 @@ if st.session_state.position is not None:
         st.session_state.position = None
         save_position(None)
 
-# 2. 新規エントリー判定
+# 2. 新規エントリー判定（マルチタイムフレーム分析を適用）
 elif st.session_state.position is None and signal in ["BUY", "SELL"]:
-    _, tp_val, sl_val = query_ai(signal, current_price, df_ltf, reason)
+    ai_reason, tp_val, sl_val = query_ai(signal, current_price, df_daily, df_htf, df_ltf, reason)
     if tp_val and sl_val:
         new_pos = {
             "side": signal,
             "entry_price": current_price,
             "tp": tp_val,
             "sl": sl_val,
-            "entry_time": now_jst_str
+            "entry_time": now_jst_str,
+            "ai_reason": ai_reason
         }
         st.session_state.position = new_pos
-        save_position(new_pos) # ポジション情報の永続化保存
+        save_position(new_pos)
 
 # ---------------------------------------------------------
 # 📊 UI表示部
@@ -291,19 +332,17 @@ st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# ⚡ 大きく強調した「含み損益（評価損益）」専用パネル
+# ⚡ 含み損益パネル
 # ---------------------------------------------------------
 if st.session_state.position:
     pos = st.session_state.position
-    # 現在の含み損益(pips & 円)の計算
     if pos["side"] == "BUY":
         unrealized_pips = (current_price - pos["entry_price"]) * 100
     else:
         unrealized_pips = (pos["entry_price"] - current_price) * 100
     unrealized_jpy = unrealized_pips * 100 * lot_size
 
-    # 利益/損失に応じたカラー・アイコン設定（視認性向上版）
-    pnl_color = "#059669" if unrealized_pips >= 0 else "#dc2626"  # 濃い緑 または 濃い赤
+    pnl_color = "#059669" if unrealized_pips >= 0 else "#dc2626"
     bg_color = "rgba(16, 185, 129, 0.08)" if unrealized_pips >= 0 else "rgba(239, 68, 68, 0.08)"
     status_icon = "📈 含み益" if unrealized_pips >= 0 else "📉 含み損"
 
@@ -382,12 +421,10 @@ fig.add_hline(y=prev_low, line_dash="dot", line_color="#0080FF", line_width=1,
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"現在値: {current_price:.3f}", annotation_position="top left")
 
-# --- ポジション保有時：チャート上への表示（マーカー & 水平線） ---
 if st.session_state.position:
     pos = st.session_state.position
     entry_time_dt = pd.to_datetime(pos["entry_time"]).tz_localize(JST)
 
-    # 1. チャート上へのエントリーポイント（マーカー表示）
     marker_symbol = "triangle-up" if pos["side"] == "BUY" else "triangle-down"
     marker_color = "#0080FF" if pos["side"] == "BUY" else "#FF4B4B"
     marker_name = f"エントリー ({pos['side']})"
@@ -402,7 +439,6 @@ if st.session_state.position:
         name=marker_name
     ))
 
-    # 2. 保有価格・TP・SLラインの描画
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="white", line_width=2,
                   annotation_text=f"保有位置: {pos['entry_price']:.3f}", annotation_position="bottom right")
     fig.add_hline(y=pos["tp"], line_dash="dash", line_color="#00FF00", line_width=2,
