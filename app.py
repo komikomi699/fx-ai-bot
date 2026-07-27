@@ -16,7 +16,7 @@ CSV_FILE = "trade_history.csv"
 CONFIG_FILE = "config.json"
 POSITION_FILE = "position.json"
 
-st.set_page_config(page_title="FX 仮想自動売買モニター V4.8", layout="wide")
+st.set_page_config(page_title="FX 仮想自動売買モニター V4.8 (逆張り版)", layout="wide")
 
 # =========================================================
 # 2. 設定およびポジションデータのファイル管理関数
@@ -80,7 +80,7 @@ saved_config = load_config()
 # =========================================================
 # 3. サイドバー設定メニュー
 # =========================================================
-st.sidebar.title("⚙️ 仮想トレード設定 (V4.8)")
+st.sidebar.title("⚙️ 仮想トレード設定 (逆張り版)")
 
 symbol = st.sidebar.text_input("通貨ペア", saved_config["symbol"])
 min_pips = st.sidebar.number_input("最小ボラティリティ (pips)", value=float(saved_config["min_pips"]), step=0.5)
@@ -107,7 +107,7 @@ if st.sidebar.button("🗑️ 取引履歴＆設定をリセット"):
     st.rerun()
 
 # =========================================================
-# 4. データ取得 & テクニカル分析
+# 4. データ取得 & テクニカル分析 (逆張りロジックへ変更)
 # =========================================================
 @st.cache_data(ttl=5)
 def load_data(sym):
@@ -145,10 +145,11 @@ def analyze(df_daily, df_htf, df_ltf, threshold_pips):
     if pips_range < threshold_pips:
         return "HOLD", f"ボラティリティ不足 ({pips_range:.1f} pips < 閾値{threshold_pips:.1f} pips)", pips_range, prev_high, prev_low, htf_trend
 
+    # 逆張りロジック: 高値更新でSELL、安値更新でBUY
     if htf_trend == "UP" and current_close > prev_high:
-        return "BUY", "H1上昇トレンド + M5高値ブレイク", pips_range, prev_high, prev_low, htf_trend
+        return "SELL", "【逆張り】高値突破後の買われすぎ（反落狙い）", pips_range, prev_high, prev_low, htf_trend
     elif htf_trend == "DOWN" and current_close < prev_low:
-        return "SELL", "H1下降トレンド + M5安値ブレイク", pips_range, prev_high, prev_low, htf_trend
+        return "BUY", "【逆張り】安値更新後の売られすぎ（反発狙い）", pips_range, prev_high, prev_low, htf_trend
 
     return "HOLD", "静観（ブレイク条件未達成）", pips_range, prev_high, prev_low, htf_trend
 
@@ -181,22 +182,22 @@ def calculate_market_sentiment(signal_type, price, df_daily, df_htf, df_ltf):
     if signal_type == "BUY":
         tp = price + 0.15
         sl = price - 0.10
-        psychology = "強気買い心理" if rsi < 70 else "買われすぎ警戒（過熱）"
+        psychology = "過度の売られすぎ（逆張り好機）" if rsi < 30 else "下転後の反発期待"
         reason_str = (
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
-            f"→ 中期上昇心理に従いエントリー。利確(+15pips) / 損切(-10pips)。"
+            f"→ 安値下抜け後のオーバーシュートと判断。逆張り買い。利確(+15pips) / 損切(-10pips)。"
         )
     elif signal_type == "SELL":
         tp = price - 0.15
         sl = price + 0.10
-        psychology = "強気売り心理" if rsi > 30 else "売られすぎ警戒（パニック売り）"
+        psychology = "過度の買われすぎ（逆張り好機）" if rsi > 70 else "上伸後の反落期待"
         reason_str = (
             f"時間帯: {market_zone}\n"
             f"RSI(14): {rsi:.1f} → {psychology}\n"
             f"日足20SMA乖離: {bias:+.2f}%\n"
-            f"→ 下降モメンタム優勢。利確(+15pips) / 損切(-10pips)。"
+            f"→ 高値上抜け後の買われすぎと判断。逆張り売り。利確(+15pips) / 損切(-10pips)。"
         )
     else:
         tp, sl = price + 0.15, price - 0.10
@@ -292,7 +293,7 @@ elif st.session_state.position is None and signal in ["BUY", "SELL"]:
 # =========================================================
 # 8. メインダッシュボードUI表示
 # =========================================================
-st.title("🤖 FX 仮想自動売買モニター V4.8")
+st.title("🤖 FX 仮想自動売買モニター V4.8 (逆張り版)")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("現在価格", f"{current_price:.3f}")
@@ -303,7 +304,6 @@ col4.metric("累計獲得 pips", f"{st.session_state.total_pnl_pips:+.1f} pips")
 st.caption(f"最終更新時間 (JST): {now_jst_str}")
 st.markdown("---")
 
-# ポジション状態・様子見表示カード（エントリー予定を表示）
 if st.session_state.position:
     pos = st.session_state.position
     if pos["side"] == "BUY":
@@ -346,8 +346,8 @@ if st.session_state.position:
     )
 else:
     hold_reason, _, _ = calculate_market_sentiment("HOLD", current_price, df_daily, df_htf, df_ltf)
-    buy_target_diff = (prev_high - current_price) * 100
-    sell_target_diff = (current_price - prev_low) * 100
+    buy_target_diff = (current_price - prev_low) * 100
+    sell_target_diff = (prev_high - current_price) * 100
 
     st.markdown(
         f"""
@@ -357,9 +357,9 @@ else:
                 <span style="color: #334155; font-size: 0.95rem; font-weight: 600;">判定理由: <b>{reason}</b></span>
             </div>
             <div style="font-size: 0.95rem; color: #1e293b; background: rgba(255,255,255,0.85); padding: 14px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #3b82f6;">
-                🎯 <b>【次回エントリー予定水準（ブレイク監視中）】</b><br>
-                📈 <b>買い予定（高値上抜け）:</b> <code>{prev_high:.3f}</code> まであと <b>{buy_target_diff:+.1f} pips</b> (H1トレンド: {htf_trend})<br>
-                📉 <b>売り予定（安値下抜け）:</b> <code>{prev_low:.3f}</code> まであと <b>{sell_target_diff:+.1f} pips</b> (H1トレンド: {htf_trend})
+                🎯 <b>【次回エントリー予定水準（逆張り監視中）】</b><br>
+                📉 <b>売り予定（高値上抜けで戻り売り）:</b> <code>{prev_high:.3f}</code> まであと <b>{sell_target_diff:+.1f} pips</b> (H1トレンド: {htf_trend})<br>
+                📈 <b>買い予定（安値下抜けで押し目買い）:</b> <code>{prev_low:.3f}</code> まであと <b>{buy_target_diff:+.1f} pips</b> (H1トレンド: {htf_trend})
             </div>
             <div style="font-size: 0.9rem; color: #334155; background: rgba(255,255,255,0.7); padding: 12px; border-radius: 6px; white-space: pre-wrap;">
 📊 <b>市場センチメント分析:</b><br>{hold_reason}
@@ -387,17 +387,16 @@ fig.add_trace(go.Scatter(
     line=dict(color='#FFD700', width=1.5)
 ))
 
-# 直近高値・安値ライン
+# 直近高値・安値ライン（逆張り用にラベル調整）
 fig.add_hline(y=prev_high, line_dash="dash", line_color="#FF4B4B", line_width=1.5,
-              annotation_text=f"Buy Target: {prev_high:.3f}", annotation_position="top right")
+              annotation_text=f"Sell Target (逆張り売り): {prev_high:.3f}", annotation_position="top right")
 
 fig.add_hline(y=prev_low, line_dash="dash", line_color="#0080FF", line_width=1.5,
-              annotation_text=f"Sell Target: {prev_low:.3f}", annotation_position="bottom right")
+              annotation_text=f"Buy Target (逆張り買い): {prev_low:.3f}", annotation_position="bottom right")
 
 fig.add_hline(y=current_price, line_dash="solid", line_color="cyan", line_width=1.5,
               annotation_text=f"Current: {current_price:.3f}", annotation_position="top left")
 
-# ポジション保有時はエントリー、TP、SLを強調描写（annotation_positionをtop leftに変更して競合エラーを回避）
 if st.session_state.position:
     pos = st.session_state.position
     fig.add_hline(y=pos["entry_price"], line_dash="solid", line_color="#FFFFFF", line_width=2.5,
